@@ -25,6 +25,7 @@ class CaptureService : Service() {
     private var dir: File? = null
     private var started = 0L
     @Volatile private var running = false
+    @Volatile private var stopping = false
     @Volatile private var paused = false
     private var pauseAt = 0L
     private val handler = Handler(Looper.getMainLooper())
@@ -90,7 +91,7 @@ class CaptureService : Service() {
                         .onFailure { gapStart("omi", it.message ?: "Omi failed") }
             "disconnect" -> omi?.disconnect()
             "start" ->
-                if (!running)
+                if (!running && !stopping)
                     runCatching { startCapture(intent) }
                         .onFailure { error ->
                             snapshot = "Capture could not start: ${error.message}"
@@ -517,11 +518,13 @@ class CaptureService : Service() {
     }
 
     private fun stopCapture() {
+        if (stopping) return
         if (!running) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
         }
+        stopping = true
         running = false
         projectionLive = false
         val duration = now()
@@ -548,8 +551,6 @@ class CaptureService : Service() {
                     store.executor.execute { runCatching { store.sync() } }
                 }
                 handler.post {
-                    active = false
-                    activeId = null
                     snapshot =
                         if (result.isSuccess)
                             "Stopped. Audio saved locally; uploads retry automatically."
@@ -565,6 +566,10 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         if (running) stopCapture()
+        // Keep Start disabled until this stopping instance is actually gone. Its worker
+        // pool has been shut down and must never be reused by a new start command.
+        active = false
+        activeId = null
         super.onDestroy()
     }
 

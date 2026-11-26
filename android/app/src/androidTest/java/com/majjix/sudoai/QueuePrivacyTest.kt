@@ -10,6 +10,50 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class QueuePrivacyTest {
+    @Test
+    fun heldRecoveryRetainsBytesAndSyncOnlySendsExplicitlyResumedSession() =
+        fixture { store, _, dirs ->
+            val intended = store.create("Intended synthetic recording").also(dirs::add)
+            val other = store.create("Held synthetic recording").also(dirs::add)
+            for (dir in listOf(intended, other)) {
+                atomic(
+                    File(dir, "session.json"),
+                    store.manifest(dir).put("upload_held", true).toString(),
+                )
+                File(dir, "partial-mic.pcm").writeBytes(ByteArray(3200) { 42 })
+                atomic(
+                    File(dir, "partial-mic.json"),
+                    JSONObject().put("start_ms", 0).put("seq", 0).put("track", "mic").toString(),
+                )
+                store.recoverInterrupted(dir)
+                assertTrue(store.manifest(dir).getBoolean("closed"))
+                assertTrue(store.manifest(dir).getBoolean("upload_held"))
+            }
+            var sends = 0
+            store.sync { _, _, _, _, _ ->
+                sends++
+                "{}"
+            }
+            assertEquals(0, sends)
+            val otherBytes =
+                other
+                    .listFiles()!!
+                    .filter { it.extension == "bin" }
+                    .associate { it.name to it.readBytes() }
+            store.resumeUpload(intended)
+            store.sync { _, path, _, _, _ ->
+                assertTrue(path.contains(intended.name))
+                sends++
+                "{}"
+            }
+            assertTrue(sends > 0)
+            assertTrue(store.manifest(intended).getBoolean("uploaded"))
+            assertTrue(store.manifest(other).getBoolean("upload_held"))
+            otherBytes.forEach { (name, bytes) ->
+                assertArrayEquals(bytes, File(other, name).readBytes())
+            }
+        }
+
     private fun fixture(test: (Store, String, MutableList<File>) -> Unit) {
         val store = Store.get(InstrumentationRegistry.getInstrumentation().targetContext)
         store.vault.clear()

@@ -135,12 +135,21 @@ class Store private constructor(val context: Context) {
         get() = vault.get("owner")
 
     val root = File(context.filesDir, "captures").apply { mkdirs() }
+    private val uploadPrivacy = UploadPrivacy(root)
     val executor = Executors.newSingleThreadScheduledExecutor()
     @Volatile var status = "Offline queue ready"
     private var failures = 0
     private var retryAt = 0L
 
     init {
+        // This runs before either automatic retry or interrupted-capture recovery can upload.
+        // On failure the UI can still open, but every upload/create/recovery gate retries fail
+        // closed.
+        runCatching { uploadPrivacy.migrate() }
+            .onFailure {
+                status =
+                    "Uploads blocked: local privacy migration incomplete. ${it.message.orEmpty()}"
+            }
         executor.execute { runCatching { sweepAcknowledged() } }
         executor.scheduleWithFixedDelay(
             {
@@ -253,6 +262,7 @@ class Store private constructor(val context: Context) {
 
     @Synchronized
     fun create(title: String, device: String = "android"): File {
+        uploadPrivacy.migrate()
         require(owner != null) { "Sign in to bind offline recordings to your account" }
         val dir = File(root, uuid()).apply { mkdirs() }
         atomic(
@@ -287,6 +297,7 @@ class Store private constructor(val context: Context) {
 
     @Synchronized
     fun queueImport(dir: File, name: String, mime: String) {
+        uploadPrivacy.migrate()
         val currentOwner = owner ?: error("Sign in before importing")
         java.io.RandomAccessFile(File(dir, "source-import"), "rw").use { it.fd.sync() }
         val m =
@@ -518,6 +529,7 @@ class Store private constructor(val context: Context) {
 
     @Synchronized
     fun sweepAcknowledged() {
+        uploadPrivacy.migrate()
         for (dir in sessions()) for (ack in dir.listFiles()!!.filter { it.extension == "ack" }) {
             val j = JSONObject(ack.readText())
             val body = File(dir, j.getString("body"))
@@ -536,6 +548,7 @@ class Store private constructor(val context: Context) {
 
     @Synchronized
     fun recoverInterrupted(dir: File) {
+        uploadPrivacy.migrate()
         val m = manifest(dir)
         if (m.optBoolean("closed") || m.optBoolean("deleted")) return
         for (track in listOf("mic", "omi", "playback")) {
@@ -589,13 +602,14 @@ class Store private constructor(val context: Context) {
             return
         }
         val errors = mutableListOf<String>()
-        for (dir in sessions()) {
+        for (dir in uploadPrivacy.uploadableSessions(owner!!, base)) {
             val m = manifest(dir)
             if (
                 m.getString("owner") != owner ||
                     m.getString("server") != base ||
                     m.optBoolean("uploaded") ||
-                    m.optBoolean("deleted")
+                    m.optBoolean("deleted") ||
+                    m.optBoolean("upload_held")
             )
                 continue
             try {
@@ -664,7 +678,15 @@ class Store private constructor(val context: Context) {
         }
         if (errors.isNotEmpty())
             throw IllegalStateException("${errors.size} session(s) pending: ${errors.first()}")
-        status = "Sync complete"
+        val held = visibleSessions().count { manifest(it).optBoolean("upload_held") }
+        status =
+            if (held > 0) "Sync complete; $held session(s) held on this phone" else "Sync complete"
+    }
+
+    @Synchronized
+    fun resumeUpload(dir: File) {
+        uploadPrivacy.resume(dir, owner ?: error("Sign in to resume upload"), base)
+        status = "Upload resumed for ${dir.name}"
     }
 
     companion object {

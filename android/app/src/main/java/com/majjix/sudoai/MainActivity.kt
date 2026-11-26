@@ -33,8 +33,13 @@ class MainActivity : ComponentActivity() {
     private var refresh by mutableStateOf(0)
     private var pendingImport: Uri? = null
     private var exportFile: File? = null
+    private var pendingStart by mutableStateOf(false)
+    private val startRequest = CaptureStartRequest()
+    private var pendingStop by mutableStateOf(false)
+    private var pendingPause by mutableStateOf<Boolean?>(null)
     private val permissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+            if (!startRequest.pending) return@registerForActivityResult
             if (
                 results
                     .filterKeys { it != Manifest.permission.POST_NOTIFICATIONS }
@@ -43,15 +48,27 @@ class MainActivity : ComponentActivity() {
             )
                 consentProjection()
             else {
+                pendingStart = false
+                startRequest.cancel()
                 message =
                     "Required permissions denied. Choose different sources or grant permissions in Settings."
             }
         }
     private val project =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (!startRequest.pending) return@registerForActivityResult
             if (result.resultCode == Activity.RESULT_OK && result.data != null)
-                startCapture(result.data)
-            else message = "Screen sharing declined. No session started."
+                runCatching { startCapture(result.data) }
+                    .onFailure {
+                        pendingStart = false
+                        startRequest.cancel()
+                        showError(it)
+                    }
+            else {
+                pendingStart = false
+                startRequest.cancel()
+                message = "Screen sharing declined. No session started."
+            }
         }
     private val pick =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -79,6 +96,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingStop = savedInstanceState?.getBoolean("pending_stop") ?: false
+        savedInstanceState?.let {
+            title = it.getString("capture_title", "Meeting")
+            mic = it.getBoolean("capture_mic", true)
+            omi = it.getBoolean("capture_omi", false)
+            playback = it.getBoolean("capture_playback", false)
+            screen = it.getBoolean("capture_screen", false)
+        }
         store = Store.get(this)
         scheduleUploads(this)
         store.executor.execute { runCatching { recoverInterrupted() }.onFailure { showError(it) } }
@@ -98,10 +123,25 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) {
                     while (true) {
                         delay(1000)
+                        if (CaptureService.active) pendingStart = false
+                        if (!CaptureService.active) {
+                            pendingStop = false
+                            pendingPause = null
+                            if (CaptureService.snapshot.startsWith("Capture could not start"))
+                                pendingStart = false
+                        }
+                        pendingPause?.let { expectedPaused ->
+                            if (
+                                CaptureService.snapshot.startsWith(
+                                    if (expectedPaused) "Paused" else "Recording"
+                                )
+                            )
+                                pendingPause = null
+                        }
                         tick++
                     }
                 }
-                val active = CaptureService.active
+                val active = CaptureService.active || pendingStart || pendingStop
                 val status = CaptureService.snapshot
                 val sessions = remember(tick, refresh) { store.visibleSessions() }
                 Surface(Modifier.fillMaxSize()) {
@@ -244,40 +284,52 @@ class MainActivity : ComponentActivity() {
                                     "Record only with the participants' consent. The app never places calls.",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
-                                if (!active)
+                                Button(
+                                    enabled =
+                                        !active &&
+                                            store.owner != null &&
+                                            (mic || omi || playback || screen),
+                                    onClick = ::requestStart,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Start session")
+                                }
+                                // Keep these controls in distinct, permanent slots. A stale Stop
+                                // tap
+                                // must never land on a Start button after state changes.
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Button(
                                         enabled =
-                                            store.owner != null &&
-                                                (mic || omi || playback || screen),
-                                        onClick = ::requestStart,
-                                        modifier = Modifier.fillMaxWidth(),
+                                            CaptureService.active &&
+                                                !pendingStop &&
+                                                pendingPause == null,
+                                        onClick = { command("pause") },
                                     ) {
-                                        Text("Start session")
+                                        Text(if (status.startsWith("Paused")) "Resume" else "Pause")
                                     }
-                                else {
-                                    Text(status)
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Button(onClick = { command("pause") }) {
-                                            Text(
-                                                if (status.startsWith("Paused")) "Resume"
-                                                else "Pause"
-                                            )
-                                        }
-                                        OutlinedButton(onClick = { command("bookmark") }) {
-                                            Text("Bookmark")
-                                        }
-                                        Button(onClick = { command("stop") }) { Text("Stop") }
+                                    OutlinedButton(
+                                        enabled = CaptureService.active && !pendingStop,
+                                        onClick = { command("bookmark") },
+                                    ) {
+                                        Text("Bookmark")
                                     }
-                                    if (omi)
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            OutlinedButton(onClick = { command("connect") }) {
-                                                Text("Connect Omi")
-                                            }
-                                            OutlinedButton(onClick = { command("disconnect") }) {
-                                                Text("Disconnect")
-                                            }
-                                        }
+                                    Button(
+                                        enabled = CaptureService.active && !pendingStop,
+                                        onClick = { command("stop") },
+                                    ) {
+                                        Text(if (pendingStop) "Stopping" else "Stop")
+                                    }
                                 }
+                                Text(if (pendingStart) "Starting session" else status)
+                                if (omi)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(onClick = { command("connect") }) {
+                                            Text("Connect Omi")
+                                        }
+                                        OutlinedButton(onClick = { command("disconnect") }) {
+                                            Text("Disconnect")
+                                        }
+                                    }
                             }
                         }
                         if (message.isNotEmpty())
@@ -311,7 +363,7 @@ class MainActivity : ComponentActivity() {
                         }
                         Text("On this phone", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            "Pending audio stays private until upload is acknowledged, then local payloads are removed. History is scoped to this account and server.",
+                            "Held sessions stay on this phone until you choose Resume upload. New sessions upload automatically. Acknowledged payloads are removed. History is scoped to this account and server.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         if (sessions.isEmpty()) Text("No local sessions yet")
@@ -341,12 +393,41 @@ class MainActivity : ComponentActivity() {
                                             else if (m.optBoolean("deleted")) "Deleted at server"
                                             else if (m.optBoolean("uploaded"))
                                                 "Uploaded · local payloads removed"
+                                            else if (m.optBoolean("upload_held"))
+                                                "Upload held on this phone · $jobs items retained"
                                             else if (CaptureService.activeId == dir.name)
                                                 "Recording · $jobs uploads pending"
                                             else
                                                 "$jobs uploads pending · ${m.optLong("duration_ms")/1000}s"
                                         )
+                                        if (m.optBoolean("upload_held")) {
+                                            Text(
+                                                "Session: ${dir.name}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
+                                        }
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            if (
+                                                bound &&
+                                                    m.optBoolean("upload_held") &&
+                                                    m.optBoolean("closed") &&
+                                                    !m.optBoolean("deleted") &&
+                                                    !m.optBoolean("uploaded")
+                                            )
+                                                TextButton(
+                                                    onClick = {
+                                                        store.executor.execute {
+                                                            runCatching {
+                                                                    store.resumeUpload(dir)
+                                                                    store.sync()
+                                                                }
+                                                                .onFailure(::showError)
+                                                            runOnUiThread { refresh++ }
+                                                        }
+                                                    }
+                                                ) {
+                                                    Text("Resume upload")
+                                                }
                                             store.meetingUrl(dir)?.let { url ->
                                                 TextButton(onClick = { browser(url) }) {
                                                     Text("Open meeting")
@@ -400,6 +481,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestStart() {
+        if (CaptureService.active || pendingStart || pendingStop) return
+        if (!startRequest.begin()) return
+        pendingStart = true
+        runCatching { requestStartPermissions() }
+            .onFailure {
+                pendingStart = false
+                startRequest.cancel()
+                showError(it)
+            }
+    }
+
+    private fun requestStartPermissions() {
         val needed = mutableListOf<String>()
         if (mic || playback) needed += Manifest.permission.RECORD_AUDIO
         if (omi)
@@ -416,14 +509,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun consentProjection() {
-        if (screen || playback)
-            project.launch(
-                getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent()
-            )
-        else startCapture(null)
+        if (!startRequest.pending || CaptureService.active || pendingStop) return
+        runCatching {
+                if (screen || playback)
+                    project.launch(
+                        getSystemService(MediaProjectionManager::class.java)
+                            .createScreenCaptureIntent()
+                    )
+                else startCapture(null)
+            }
+            .onFailure {
+                pendingStart = false
+                startRequest.cancel()
+                showError(it)
+            }
     }
 
     private fun startCapture(data: Intent?) {
+        if (!startRequest.consume(canStart = !pendingStop && !CaptureService.active)) return
         val i =
             Intent(this, CaptureService::class.java)
                 .setAction("start")
@@ -433,12 +536,42 @@ class MainActivity : ComponentActivity() {
                 .putExtra("playback", playback)
                 .putExtra("screen", screen)
         if (data != null) i.putExtra("projection", data)
-        startForegroundService(i)
+        try {
+            startForegroundService(i)
+        } catch (e: Exception) {
+            pendingStart = false
+            throw e
+        }
         message = ""
     }
 
     private fun command(action: String) {
-        startService(Intent(this, CaptureService::class.java).setAction(action))
+        if (!CaptureService.active || pendingStop) return
+        if (action == "stop") {
+            pendingStop = true
+            pendingStart = false
+            startRequest.cancel()
+        }
+        if (action == "pause") {
+            if (pendingPause != null) return
+            pendingPause = !CaptureService.snapshot.startsWith("Paused")
+        }
+        runCatching { startService(Intent(this, CaptureService::class.java).setAction(action)) }
+            .onFailure {
+                if (action == "stop") pendingStop = false
+                if (action == "pause") pendingPause = null
+                showError(it)
+            }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("pending_stop", pendingStop)
+        outState.putString("capture_title", title)
+        outState.putBoolean("capture_mic", mic)
+        outState.putBoolean("capture_omi", omi)
+        outState.putBoolean("capture_playback", playback)
+        outState.putBoolean("capture_screen", screen)
+        super.onSaveInstanceState(outState)
     }
 
     private fun browser(url: String) {
