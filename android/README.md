@@ -18,7 +18,7 @@ For a separately signed private release, supply an external keystore and environ
 ## Capture
 
 1. Sign in through the system browser. The app validates a time-limited PKCE state, exchanges the code and stores the bearer token with Android Keystore AES-GCM. Browser redirects use `sudoai://auth/callback`.
-2. Choose microphone, Omi, eligible playback and/or screen moments. Start creates a session bound to the current account and server. Screen sharing requests fresh Android consent for each session.
+2. Choose microphone, Omi, eligible playback and/or screen moments. **Start session** opens a confirmation; choose **Start recording** to create a session bound to the current account and server. Cancel leaves all capture sources idle. Screen sharing requests fresh Android consent for each session.
 3. For Omi, tap **Connect Omi** after starting. The scan connects to the first device advertising the Omi service. The device name and negotiated codec appear in source status. Use one advertising Omi nearby during the pilot. Disconnect and reconnect are explicit controls.
 4. Pause, resume, bookmark or stop using the app or, when notifications are allowed, the foreground notification. If notification permission is denied, stop from the app. The microphone is room audio, including audible speakerphone sound. This app cannot directly capture remote cellular or Teams call audio. Android may silence the microphone during a call. Silencing callbacks create gaps and a source warning.
 5. Screen moments use bundled, local ML Kit OCR, sample at most once per 15 seconds, deduplicate normalized text, and save a resized JPEG with changed text. A bookmark requests an immediate moment. Locked screens are skipped. If Android revokes sharing, stop and start a new session to grant consent again; unlocking or resuming does not restore it. Protected content and source apps may prevent screen/playback capture; silence alone cannot establish why playback is unavailable.
@@ -54,3 +54,9 @@ The Android implementation is original code written for this project, using Andr
 No upstream application code, bundled model weights from Omi, firmware or Opus native library has been copied. Android supplies its system Opus decoder. ML Kit's bundled OCR model is delivered by its declared Gradle dependency.
 
 All authored Kotlin sources were formatted with the official ktfmt 0.54 formatter using `--kotlinlang-style`.
+
+### Recording start and shutdown diagnostics
+
+Recording requires both the current Activity request and a short-lived, single-use service authorization issued after confirmation and permission consent. Replayed, expired or process-old intents do not open a capture source or create another session. Stop invalidates pending authorization and keeps Start disabled until the old service is destroyed. Shutdown uses the last processed command identifier so queued requests are not torn down with the preceding service. Rejected foreground requests briefly fulfill Android's service obligation with a nonrecording notification and then stop; they do not open microphone, playback, screen or BLE inputs.
+
+`SudoAICapture` diagnostics identify confirmation, accepted/rejected requests and service shutdown with process-local instance/command identifiers. They omit recording content, titles, account identity and authorization tickets. These diagnostics help distinguish UI confirmation from stale command delivery in a future reproduction; they cannot reconstruct an earlier unlogged incident.

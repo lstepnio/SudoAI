@@ -44,9 +44,8 @@ class NativeCaptureTest {
             assertEquals(1, store.nextSequence(dir, "mic"))
             store.vault.put("owner", "another-account")
             store.vault.put("token", "synthetic-test-token")
-            store
-                .sync() // The original account's queue must be held without connecting to the
-                        // unavailable server.
+            store.sync() // The original account's queue must be held without connecting to the
+            // unavailable server.
             assertTrue(job.exists())
             store.close(dir, 1100)
             assertEquals(1, store.manifest(dir).getInt("count_mic"))
@@ -82,6 +81,10 @@ class NativeCaptureTest {
             android.content
                 .Intent(context, CaptureService::class.java)
                 .setAction("start")
+                .putExtra(
+                    CaptureStartAuthorization.EXTRA,
+                    CaptureStartAuthorization.process.issue(),
+                )
                 .putExtra("mic", false)
                 .putExtra("omi", true)
                 .putExtra("title", "Synthetic service controls")
@@ -115,9 +118,15 @@ class NativeCaptureTest {
                 dir.listFiles()!!.any { it.name.startsWith("200-mic-") },
             )
         } finally {
+            // Destroy the real Compose view before removing files it is rendering.
+            instrumentation.runOnMainSync { activity.finish() }
+            val deadline = android.os.SystemClock.uptimeMillis() + 3000
+            while (
+                !activity.isDestroyed && android.os.SystemClock.uptimeMillis() < deadline
+            ) android.os.SystemClock.sleep(20)
+            assertTrue("Fixture activity destroyed before deleting its files", activity.isDestroyed)
             dir.deleteRecursively()
             store.vault.clear()
-            instrumentation.runOnMainSync { activity.finish() }
         }
     }
 

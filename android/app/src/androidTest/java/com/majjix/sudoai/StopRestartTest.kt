@@ -31,16 +31,22 @@ class StopRestartTest {
             )
             .also { instrumentation.waitForIdleSync() }
 
-    private fun start(title: String) =
-        context.startForegroundService(
+    private fun start(title: String): Intent {
+        val request =
             Intent(context, CaptureService::class.java)
                 .setAction("start")
+                .putExtra(
+                    CaptureStartAuthorization.EXTRA,
+                    CaptureStartAuthorization.process.issue(),
+                )
                 .putExtra("mic", false)
                 .putExtra("omi", true)
                 .putExtra("screen", false)
                 .putExtra("playback", false)
                 .putExtra("title", title)
-        )
+        context.startForegroundService(request)
+        return request
+    }
 
     private fun stop() =
         context.startService(Intent(context, CaptureService::class.java).setAction("stop"))
@@ -73,7 +79,7 @@ class StopRestartTest {
             store.sessions().filter { store.manifest(it).optString("owner") == owner }
         try {
             activity = openActivity()
-            start("Synthetic first Omi-only session")
+            val firstRequest = start("Synthetic first Omi-only session")
             await("First foreground capture started") {
                 CaptureService.active && CaptureService.activeId != null
             }
@@ -104,6 +110,16 @@ class StopRestartTest {
             await("Old stopping instance was destroyed") { !CaptureService.active }
             assertTrue(store.manifest(File(store.root, firstId)).getBoolean("closed"))
 
+            // A service can be recreated by a stale Intent. Replaying the original request
+            // must not recreate its recording, even though no capture is currently active.
+            val rejectedBefore = CaptureService.rejectedStarts
+            context.startForegroundService(firstRequest)
+            await("Replayed Start reached the actual service and was rejected") {
+                CaptureService.rejectedStarts > rejectedBefore
+            }
+            assertFalse("Replayed request did not start capture", CaptureService.active)
+            assertEquals("Replayed request did not create another directory", 1, ownSessions().size)
+
             activity = openActivity()
             start("Synthetic fresh explicit Omi-only session")
             await("Fresh instance accepted explicit Start") {
@@ -129,7 +145,12 @@ class StopRestartTest {
                 stop()
                 await("Synthetic capture cleaned up") { !CaptureService.active }
             }
-            activity?.let { current -> instrumentation.runOnMainSync { current.finish() } }
+            activity?.let { current ->
+                instrumentation.runOnMainSync { current.finish() }
+                await("Synthetic activity destroyed before removing fixtures") {
+                    current.isDestroyed
+                }
+            }
             ownSessions().forEach { it.deleteRecursively() }
             store.vault.clear()
         }

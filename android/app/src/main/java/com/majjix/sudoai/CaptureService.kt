@@ -26,6 +26,8 @@ class CaptureService : Service() {
     private var started = 0L
     @Volatile private var running = false
     @Volatile private var stopping = false
+    private var finalized = false
+    private var lastCommandId = 0
     @Volatile private var paused = false
     private var pauseAt = 0L
     private val handler = Handler(Looper.getMainLooper())
@@ -81,6 +83,7 @@ class CaptureService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastCommandId = startId
         when (intent?.action) {
             "stop" -> stopCapture()
             "pause" -> togglePause()
@@ -90,15 +93,56 @@ class CaptureService : Service() {
                     runCatching { omi?.connect() }
                         .onFailure { gapStart("omi", it.message ?: "Omi failed") }
             "disconnect" -> omi?.disconnect()
-            "start" ->
-                if (!running && !stopping)
+            "start" -> {
+                val authorized =
+                    CaptureStartAuthorization.process.consume(
+                        intent.getStringExtra(CaptureStartAuthorization.EXTRA),
+                        canStart = !running && !stopping,
+                    )
+                android.util.Log.i(
+                    "SudoAICapture",
+                    "start_${if (authorized) "accepted" else "rejected"} instance=${System.identityHashCode(this)} command=$startId",
+                )
+                if (!authorized) rejectedStarts++
+                if (authorized)
                     runCatching { startCapture(intent) }
                         .onFailure { error ->
+                            if (!running) nonRecordingForeground()
                             snapshot = "Capture could not start: ${error.message}"
                             stopCapture()
                         }
+                else if (!running) {
+                    // startForegroundService still imposes a promotion obligation on a
+                    // rejected request. Fulfill it without opening any capture source.
+                    nonRecordingForeground()
+                    if (!stopping) {
+                        snapshot =
+                            "Capture could not start: request expired or was already used. Confirm Start again."
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelfResult(startId)
+                    }
+                }
+            }
+        }
+        if (stopping && finalized) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelfResult(startId)
         }
         return START_NOT_STICKY
+    }
+
+    private fun nonRecordingForeground() {
+        val notification =
+            NotificationCompat.Builder(this, "capture")
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setContentTitle("SudoAI recording not started")
+                .setContentText("The Start request was rejected. No capture source was opened.")
+                .setOnlyAlertOnce(true)
+                .build()
+        val type =
+            if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE
+            else 0
+        startForeground(10, notification, type)
     }
 
     private fun notification(): Notification {
@@ -257,39 +301,59 @@ class CaptureService : Service() {
                         .build()
                 )
             val record = builder.build()
-            check(record.state == AudioRecord.STATE_INITIALIZED) { "Audio input unavailable" }
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
+                record.release()
+                error("Audio input unavailable")
+            }
             synchronized(recorders) { recorders.add(record) }
-            record.registerAudioRecordingCallback(
-                mainExecutor,
-                object : AudioManager.AudioRecordingCallback() {
-                    override fun onRecordingConfigChanged(
-                        configs: MutableList<AudioRecordingConfiguration>
-                    ) {
-                        configs
-                            .firstOrNull { it.clientAudioSessionId == record.audioSessionId }
-                            ?.let { config ->
-                                if (config.isClientSilenced) {
-                                    silenced.add(track)
-                                    chunks[track]?.flush()
-                                    gapStart(
-                                        track,
-                                        "Android silenced this input; another app or call may own the microphone",
-                                    )
-                                } else {
-                                    silenced.remove(track)
-                                    if (gaps[track]?.second?.startsWith("Android silenced") == true)
-                                        gapEnd(track)
-                                }
-                                publish()
+            captureWorker(
+                workers,
+                start = {
+                    record.registerAudioRecordingCallback(
+                        mainExecutor,
+                        object : AudioManager.AudioRecordingCallback() {
+                            override fun onRecordingConfigChanged(
+                                configs: MutableList<AudioRecordingConfiguration>
+                            ) {
+                                configs
+                                    .firstOrNull {
+                                        it.clientAudioSessionId == record.audioSessionId
+                                    }
+                                    ?.let { config ->
+                                        if (config.isClientSilenced) {
+                                            silenced.add(track)
+                                            chunks[track]?.flush()
+                                            gapStart(
+                                                track,
+                                                "Android silenced this input; another app or call may own the microphone",
+                                            )
+                                        } else {
+                                            silenced.remove(track)
+                                            if (
+                                                gaps[track]
+                                                    ?.second
+                                                    ?.startsWith("Android silenced") == true
+                                            )
+                                                gapEnd(track)
+                                        }
+                                        publish()
+                                    }
                             }
-                    }
+                        },
+                    )
+                    record.startRecording()
+                    statuses[track] =
+                        if (track == "mic") "Phone microphone / room audio"
+                        else "Eligible app playback only; app may block capture"
                 },
-            )
-            record.startRecording()
-            statuses[track] =
-                if (track == "mic") "Phone microphone / room audio"
-                else "Eligible app playback only; app may block capture"
-            workers.execute {
+                release = {
+                    synchronized(recorders) { recorders.remove(record) }
+                    runCatching { record.stop() }
+                    record.release()
+                    runCatching { chunks[track]?.flush() }
+                        .onFailure { gapStart(track, "Local save failed: ${it.message}") }
+                },
+            ) {
                 val buffer = ByteArray(min)
                 try {
                     while (running) {
@@ -306,11 +370,6 @@ class CaptureService : Service() {
                     }
                 } catch (e: Exception) {
                     if (running) gapStart(track, e.message ?: "Audio interrupted")
-                } finally {
-                    runCatching { record.stop() }
-                    record.release()
-                    runCatching { chunks[track]?.flush() }
-                        .onFailure { gapStart(track, "Local save failed: ${it.message}") }
                 }
             }
         } catch (e: Exception) {
@@ -518,10 +577,15 @@ class CaptureService : Service() {
     }
 
     private fun stopCapture() {
+        android.util.Log.i(
+            "SudoAICapture",
+            "stop instance=${System.identityHashCode(this)} running=$running stopping=$stopping",
+        )
+        CaptureStartAuthorization.process.cancel()
         if (stopping) return
         if (!running) {
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            stopSelfResult(lastCommandId)
             return
         }
         stopping = true
@@ -551,13 +615,15 @@ class CaptureService : Service() {
                     store.executor.execute { runCatching { store.sync() } }
                 }
                 handler.post {
+                    finalized = true
                     snapshot =
                         if (result.isSuccess)
                             "Stopped. Audio saved locally; uploads retry automatically."
                         else
                             "Local save interrupted: ${result.exceptionOrNull()?.message}. Keep app data for recovery."
                     stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                    // Never tear down a service record with a newer command still queued.
+                    stopSelfResult(lastCommandId)
                 }
             }
             .start()
@@ -574,6 +640,7 @@ class CaptureService : Service() {
     }
 
     companion object {
+        @Volatile internal var rejectedStarts = 0L
         @Volatile var active = false
         @Volatile var activeId: String? = null
         @Volatile var snapshot = "Ready"

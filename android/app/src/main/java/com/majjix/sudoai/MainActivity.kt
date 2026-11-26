@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
     private var pendingImport: Uri? = null
     private var exportFile: File? = null
     private var pendingStart by mutableStateOf(false)
+    private var confirmStart by mutableStateOf(false)
     private val startRequest = CaptureStartRequest()
     private var pendingStop by mutableStateOf(false)
     private var pendingPause by mutableStateOf<Boolean?>(null)
@@ -144,6 +145,34 @@ class MainActivity : ComponentActivity() {
                 val active = CaptureService.active || pendingStart || pendingStop
                 val status = CaptureService.snapshot
                 val sessions = remember(tick, refresh) { store.visibleSessions() }
+                if (confirmStart) {
+                    AlertDialog(
+                        onDismissRequest = { confirmStart = false },
+                        title = { Text("Start recording?") },
+                        text = {
+                            Text(
+                                "Record \"${title.ifBlank { "Meeting" }}\" using the selected sources? Make sure everyone involved has consented."
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    confirmStart = false
+                                    android.util.Log.i(
+                                        "SudoAICapture",
+                                        "start_confirmed activity=${System.identityHashCode(this@MainActivity)}",
+                                    )
+                                    requestStart()
+                                }
+                            ) {
+                                Text("Start recording")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirmStart = false }) { Text("Cancel") }
+                        },
+                    )
+                }
                 Surface(Modifier.fillMaxSize()) {
                     Column(
                         Modifier.statusBarsPadding()
@@ -287,9 +316,10 @@ class MainActivity : ComponentActivity() {
                                 Button(
                                     enabled =
                                         !active &&
+                                            !confirmStart &&
                                             store.owner != null &&
                                             (mic || omi || playback || screen),
-                                    onClick = ::requestStart,
+                                    onClick = { confirmStart = true },
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     Text("Start session")
@@ -556,9 +586,11 @@ class MainActivity : ComponentActivity() {
                 .putExtra("playback", playback)
                 .putExtra("screen", screen)
         if (data != null) i.putExtra("projection", data)
+        i.putExtra(CaptureStartAuthorization.EXTRA, CaptureStartAuthorization.process.issue())
         try {
             startForegroundService(i)
         } catch (e: Exception) {
+            CaptureStartAuthorization.process.cancel()
             pendingStart = false
             throw e
         }
