@@ -47,6 +47,21 @@ internal class UploadPrivacy(
     }
 
     @Synchronized
+    fun hold(dir: File, owner: String, server: String) {
+        migrate()
+        require(dir.canonicalFile.parentFile == root.canonicalFile) { "Unknown local session" }
+        val file = File(dir, "session.json")
+        val m = JSONObject(file.readText())
+        require(m.optString("owner") == owner && m.optString("server") == server) {
+            "This session belongs to another sign-in or service"
+        }
+        require(m.optBoolean("closed") && !m.optBoolean("uploaded") && !m.optBoolean("deleted")) {
+            "Only a closed pending session can be held"
+        }
+        write(file, m.put("upload_held", true).toString())
+    }
+
+    @Synchronized
     fun resume(dir: File, owner: String, server: String) {
         migrate()
         require(dir.canonicalFile.parentFile == root.canonicalFile) { "Unknown local session" }

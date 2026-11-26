@@ -684,6 +684,13 @@ class Store private constructor(val context: Context) {
     }
 
     @Synchronized
+    fun holdUpload(dir: File) {
+        require(CaptureService.activeId != dir.name) { "Stop this session before holding upload" }
+        uploadPrivacy.hold(dir, owner ?: error("Sign in to hold upload"), base)
+        status = "Upload held for ${dir.name}"
+    }
+
+    @Synchronized
     fun resumeUpload(dir: File) {
         uploadPrivacy.resume(dir, owner ?: error("Sign in to resume upload"), base)
         status = "Upload resumed for ${dir.name}"

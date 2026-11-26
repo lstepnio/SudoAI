@@ -128,6 +128,50 @@ class UploadPrivacyTest {
     }
 
     @Test
+    fun explicitHoldOnNewClosedSessionSurvivesRestartAndPreservesExcludedBytes() {
+        val excluded = session("excluded")
+        val p = policy()
+        p.migrate()
+        val fresh = session("fresh")
+        val other = session("another-new")
+        val excludedManifest = File(excluded, "session.json").readBytes()
+        val freshBytes = File(fresh, "pending.bin").readBytes()
+        assertEquals(listOf(other, fresh), uploadable(p))
+        p.hold(fresh, "fixture-owner", "https://fixture.test")
+        assertEquals(listOf(other), uploadable(policy()))
+        assertTrue(manifest(fresh).getBoolean("upload_held"))
+        assertArrayEquals(freshBytes, File(fresh, "pending.bin").readBytes())
+        assertArrayEquals(excludedManifest, File(excluded, "session.json").readBytes())
+        assertArrayEquals(byteArrayOf(1, 4, 9, 16), File(excluded, "pending.bin").readBytes())
+        p.resume(fresh, "fixture-owner", "https://fixture.test")
+        assertEquals(listOf(other, fresh), uploadable(p))
+        assertTrue(manifest(excluded).getBoolean("upload_held"))
+    }
+
+    @Test
+    fun holdRejectsOpenUploadedDeletedAndForeignSessions() {
+        val p = policy()
+        p.migrate()
+        val open = session("open", closed = false)
+        val uploaded = session("uploaded", uploaded = true)
+        val deleted = session("deleted")
+        write(File(deleted, "session.json"), manifest(deleted).put("deleted", true).toString())
+        val pending = session("pending")
+        for (dir in listOf(open, uploaded, deleted)) {
+            assertThrows(IllegalArgumentException::class.java) {
+                p.hold(dir, "fixture-owner", "https://fixture.test")
+            }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            p.hold(pending, "another-owner", "https://fixture.test")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            p.hold(pending, "fixture-owner", "https://other.test")
+        }
+        assertFalse(manifest(pending).optBoolean("upload_held"))
+    }
+
+    @Test
     fun malformedQueueMetadataOrMarkerNeverPermitsSending() {
         val bad = session("bad")
         File(bad, "session.json").writeText("invalid-json")

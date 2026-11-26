@@ -406,15 +406,32 @@ class MainActivity : ComponentActivity() {
                                                 style = MaterialTheme.typography.bodySmall,
                                             )
                                         }
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            if (
-                                                bound &&
-                                                    m.optBoolean("upload_held") &&
-                                                    m.optBoolean("closed") &&
-                                                    !m.optBoolean("deleted") &&
-                                                    !m.optBoolean("uploaded")
-                                            )
+                                        if (
+                                            bound &&
+                                                m.optBoolean("closed") &&
+                                                !m.optBoolean("deleted") &&
+                                                !m.optBoolean("uploaded") &&
+                                                CaptureService.activeId != dir.name
+                                        ) {
+                                            // Separate slots prevent a repeated Hold tap from
+                                            // becoming Resume.
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
                                                 TextButton(
+                                                    enabled = !m.optBoolean("upload_held"),
+                                                    onClick = {
+                                                        store.executor.execute {
+                                                            runCatching { store.holdUpload(dir) }
+                                                                .onFailure(::showError)
+                                                            runOnUiThread { refresh++ }
+                                                        }
+                                                    },
+                                                ) {
+                                                    Text("Hold upload")
+                                                }
+                                                TextButton(
+                                                    enabled = m.optBoolean("upload_held"),
                                                     onClick = {
                                                         store.executor.execute {
                                                             runCatching {
@@ -424,10 +441,13 @@ class MainActivity : ComponentActivity() {
                                                                 .onFailure(::showError)
                                                             runOnUiThread { refresh++ }
                                                         }
-                                                    }
+                                                    },
                                                 ) {
                                                     Text("Resume upload")
                                                 }
+                                            }
+                                        }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             store.meetingUrl(dir)?.let { url ->
                                                 TextButton(onClick = { browser(url) }) {
                                                     Text("Open meeting")
