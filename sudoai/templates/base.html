@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <meta name="sudoai-csrf" content="{{ csrf }}">
+        <meta name="theme-color" content="#18392d">
+        <title>{% block title %}Meeting library{% endblock %} · SudoAI</title>
+        <link rel="stylesheet" href="/static/app.css">
+        <script src="/static/app.js" defer></script>
+    </head>
+    <body>
+        <a class="skip" href="#main">Skip to content</a>
+        <header>
+            <div class="bar">
+                <a class="brand" href="/">
+                    <span class="wave" aria-hidden="true">
+                        <i>
+                        </i>
+                        <i>
+                        </i>
+                        <i>
+                        </i>
+                        <i>
+                        </i>
+                        <i>
+                        </i>
+                    </span>SudoAI</a>
+                    {% if user %}
+                        <nav aria-label="Main">
+                            <a href="/" {% if section=='library' %}aria-current="page"{% endif %}>Library</a>
+                            <a href="/?view=actions"
+                               {% if section=='actions' %}aria-current="page"{% endif %}>Action items</a>
+                        </nav>
+                        <button class="logout" id="signout" title="{{ user.name }}">Sign out</button>
+                    {% endif %}
+                </div>
+            </header>
+            <main id="main">
+                {% if user and not ai_available %}
+                    <p class="alert" role="status">Recordings are saved. Transcription, summaries and questions will become available when the service operator connects OpenAI. Imported transcripts and screen text are searchable now.</p>
+                {% endif %}
+                {% block main %}{% endblock %}
+            </main>
+            <div id="notice" role="status" aria-live="polite"></div>
+        </body>
+    </html>

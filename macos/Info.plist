@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>SudoAI</string>
+<key>CFBundleDisplayName</key><string>SudoAI</string>
+<key>CFBundleIdentifier</key><string>com.majjix.sudoai</string>
+<key>CFBundleExecutable</key><string>SudoAI</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>LSMinimumSystemVersion</key><string>14.2</string>
+<key>LSUIElement</key><true/>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>Record your chosen microphone as a separate meeting audio track when you start capture.</string>
+<key>NSAudioCaptureUsageDescription</key><string>Capture Microsoft Teams output as a separate track while leaving your normal speakers and headset unchanged.</string>
+<key>NSScreenCaptureUsageDescription</key><string>Save changed moments and recognize text from the window or display you explicitly select.</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>Connect directly to your Omi wearable when you explicitly claim the connection in SudoAI.</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.majjix.sudoai.auth</string><key>CFBundleURLSchemes</key><array><string>sudoai</string></array></dict></array>
+</dict></plist>

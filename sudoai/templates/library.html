@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% from "forms.html" import askform,importform,refs %}
+{% block main %}
+    {% if section=="actions" %}
+        <section class="intro">
+            <h1>Action items</h1>
+        </section>
+        <section class="panel">
+            {% for task in tasks %}
+                <article class="task">
+                    <label>
+                    <input class="check-task"
+                           type="checkbox"
+                           data-session="{{ task.session_id }}"
+                           data-task="{{ task.task_id }}"
+                           {% if task.completed %}checked{% endif %}>{{ task.text }}</label>
+                    <p>
+                        <a href="/sessions/{{ task.session_id }}">{{ task.meeting }}</a>
+                        {% if task.owner %}· {{ task.owner }}{% endif %}
+                    {% if task.due %}· {{ task.due }}{% endif %} {{ refs(task.references) }}</p>
+                </article>
+            {% else %}
+                <p class="empty">Action items appear here when a meeting establishes a next step.</p>
+            {% endfor %}
+        </section>
+    {% else %}
+        <section class="intro split">
+            <div>
+                <h1>Meeting library</h1>
+            </div>
+            <button class="primary" id="open-import">+ Import meeting</button>
+        </section>
+        <div class="columns">
+            <section>
+                <form method="get" class="search">
+                    <label class="sr" for="search">Search transcripts and screen text</label>
+                    <input type="search"
+                           id="search"
+                           name="q"
+                           value="{{ q }}"
+                           placeholder="Search transcripts and slides"
+                           maxlength="500">
+                    <button type="submit">Search</button>
+                </form>
+                {% if q %}
+                    <section class="panel">
+                        <h2>Search results</h2>
+                        {% for r in results %}
+                            <article class="entry">
+                                <a href="/sessions/{{ r.session_id }}#e-{{ r.id }}">{{ r.title }}</a>
+                                <p>{{ r.speaker }} · {{ r.start_ms|clock }}</p>
+                                <p>{{ r.text|truncate(300) }}</p>
+                            </article>
+                        {% else %}
+                            <p class="empty">No matching transcript or slide text.</p>
+                        {% endfor %}
+                    </section>
+                {% else %}
+                    <section class="panel">
+                        <div class="listhead">
+                            <h2>Meetings</h2>
+                            <span>{{ meetings|length }}</span>
+                        </div>
+                        {% for m in meetings %}
+                            <a class="meeting-row" href="/sessions/{{ m.id }}">
+                                <div>
+                                    <small>{{ m.started_at[:10] }} · {{ {'macos':'Mac','android':'Android','import':'Import'}.get(m.device,m.device) }}</small>
+                                    <strong>{{ m.title }}</strong>
+                                    <small>{{ m.duration_ms|clock }}{% if m.moments %} · {{ m.moments }} screen moments{% endif %}
+                                    </small>
+                                </div>
+                                <span class="state">{{ m.state }}</span>
+                            </a>
+                        {% else %}
+                            <div class="empty">
+                                <h3>Your first meeting</h3>
+                                <p>Start a recording from the Mac menu bar or your Pixel, or import a transcript.</p>
+                            </div>
+                        {% endfor %}
+                    </section>
+                {% endif %}
+            </section>
+            <aside>{{ askform() }}{% if android_build %}
+                <section class="panel">
+                    <h2>Android app</h2>
+                    <a class="button" href="/downloads/android">Download pilot APK</a>
+                </section>
+    {% endif %}
+    </aside>
+</div>{{ importform() }}{% endif %}
+{% endblock %}

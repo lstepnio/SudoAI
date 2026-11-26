@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!requirements.txt
+!sudoai
+!sudoai/**
+**/__pycache__
+**/*.pyc

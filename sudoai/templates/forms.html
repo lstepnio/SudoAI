@@ -1,0 +1,48 @@
+{% macro askform(sid='') %}
+    <section class="askbox">
+        <h2>Ask {{ 'this meeting' if sid else 'your library' }}</h2>
+        <form class="ask-form" data-session="{{ sid }}">
+            <label class="sr" for="question">Your question</label>
+            <input id="question"
+                   name="question"
+                   placeholder="What did we decide about…"
+                   required
+                   minlength="2"
+                   maxlength="1200">
+            <button class="primary" type="submit">Ask</button>
+        </form>
+        <div class="answer" aria-live="polite"></div>
+    </section>
+{% endmacro %}
+{% macro importform(sid='') %}
+    <dialog id="import-dialog">
+        <form class="import-form" data-session="{{ sid }}">
+            <h2>{{ 'Attach to this meeting' if sid else 'Import a meeting' }}</h2>
+            <p>Choose a Teams VTT transcript or an exported audio recording.</p>
+            {% if not sid %}
+                <label>
+                    Meeting title <small>(optional)</small>
+                    <input name="title" maxlength="300">
+                </label>
+            {% endif %}
+            <label>
+                File<input type="file"
+                           required
+                           name="file"
+                           accept=".vtt,.m4a,.mp3,.mp4,.wav,.ogg,.opus,.webm,.flac">
+            </label>
+            <div class="tools">
+                <button type="button" class="cancel">Cancel</button>
+                <button class="primary" type="submit">Import</button>
+            </div>
+            <p class="form-status" role="status"></p>
+        </form>
+    </dialog>
+{% endmacro %}
+{% macro refs(items) %}
+    {% for ref in items %}
+        <a class="cite"
+           href="/sessions/{{ ref.session_id }}#e-{{ ref.id }}"
+           title="{{ ref.quote }}">{{ ref.at_ms|clock }} ↗</a>
+    {% endfor %}
+{% endmacro %}

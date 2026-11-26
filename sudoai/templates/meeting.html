@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% from "forms.html" import askform,importform,refs %}
+{% block title %}{{ m.title }}{% endblock %}
+{% block main %}
+    <section class="intro">
+        <a class="back" href="/">← Meeting library</a>
+        <h1>{{ m.title }}</h1>
+        <div class="meta">{{ m.started_at[:10] }} · {{ m.duration_ms|clock }} · {{ m.device }} · {{ m.state }}</div>
+        <div class="tools">
+            <button id="open-import">Attach transcript or audio</button>
+            <a class="button" href="/api/v1/sessions/{{ m.id }}/export">Export Markdown</a>
+            <button id="delete" data-session="{{ m.id }}">Delete</button>
+        </div>
+    </section>
+    {% if m.error %}
+        <div class="alert">{{ m.error }} {% if m.state=="failed" %}
+            <button id="retry" data-session="{{ m.id }}">Retry processing</button>
+    {% endif %}
+    </div>
+{% endif %}
+<div class="columns">
+    <section>
+        {% for key,label in [('decisions','Decisions'),('actions','Action items'),('highlights','Highlights')] %}
+            {% if m.summary[key] %}
+                <section class="panel">
+                    <h2>{{ label }}</h2>
+                    {% for item in m.summary[key] %}
+                        <article class="entry">
+                            {% if key=="actions" %}
+                                <label>
+                                <input class="check-task"
+                                       type="checkbox"
+                                       data-session="{{ m.id }}"
+                                       data-task="{{ item.task_id }}"
+                                       {% if item.completed %}checked{% endif %}>{{ item.text }}</label>
+                    {% else %}{{ item.text }}{% endif %}
+                    {% if item.owner or item.due %}
+                        <p>{{ [item.owner,item.due]|select|join(" · ") }}</p>
+                    {% endif %} {{ refs(item.references) }}</article>
+            {% endfor %}
+                </section>
+            {% endif %}
+        {% endfor %}
+        <section class="panel">
+            <h2>Timeline</h2>
+            {% for e in m.evidence %}
+                <article class="entry timeline" id="e-{{ e.id }}">
+                    <small>{{ e.start_ms|clock }} · {{ e.speaker }}</small>
+                    <p>{{ e.text }}</p>
+                    {% if e.has_image %}
+                        <a href="/api/v1/sessions/{{ m.id }}/images/{{ e.moment_id }}">
+                            <img loading="lazy"
+                                 alt="Captured screen at {{ e.start_ms|clock }}"
+                                 src="/api/v1/sessions/{{ m.id }}/images/{{ e.moment_id }}">
+                        </a>
+                    {% endif %}
+                    {% if e.has_audio %}
+                        <audio controls
+                               preload="none"
+                               src="/api/v1/sessions/{{ m.id }}/audio/{{ e.track }}/{{ e.chunk_seq }}">
+                        </audio>
+                    {% endif %}
+                </article>
+            {% else %}
+                <p class="empty">
+                    {% if m.state=="processing" %}Processing your recording. Refresh to see the transcript.{% else %}No transcript or screen text is available yet.{% endif %}
+                </p>
+            {% endfor %}
+        </section>
+    </section>
+    <aside>
+        {{ askform(m.id) }}
+        {% if m.gaps %}
+            <section class="panel">
+                <h2>Capture gaps</h2>
+                {% for g in m.gaps %}
+                    <p>
+                        {{ g.start_ms|clock }} to {{ g.end_ms|clock }} · {{ g.track }}
+                        <br>
+                        {{ g.reason }}
+                    </p>
+                {% endfor %}
+            </section>
+        {% endif %}
+        {% if m.usage %}
+            <section class="panel">
+                <h2>AI usage</h2>
+                {% for u in m.usage %}
+                    <p>
+                        <strong>{{ u.operation|capitalize }}</strong>
+                        <br>
+                        <small>{{ u.model }} · {% if u.operation=="transcribe" %}{{ u.audio_ms|clock }} audio{% else %}{{ u.input_tokens + u.output_tokens }} tokens{% endif %}
+                        </small>
+                    </p>
+                {% endfor %}
+                <small>{{ m.retries }} job retries</small>
+            </section>
+        {% endif %}
+    </aside>
+</div>{{ importform(m.id) }}{% endblock %}
